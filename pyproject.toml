@@ -9,3 +9,16 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "slack-bolt>=1.27.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.11",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E402"]

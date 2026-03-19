@@ -1,0 +1,77 @@
+name: Claude Code - Issue Handler
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+jobs:
+  handle:
+    # 봇 자신의 댓글에는 반응하지 않음
+    if: >
+      (github.event_name == 'issues') ||
+      (github.event_name == 'issue_comment' && !endsWith(github.event.comment.user.login, '[bot]'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run Claude Code
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json body -q .body)
+
+          # 이슈 댓글 이벤트인 경우 전체 댓글 히스토리 포함
+          COMMENTS=""
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            COMMENTS=$(gh issue view "$ISSUE_NUMBER" --json comments -q '.comments[] | "---\n\(.author.login): \(.body)"')
+          fi
+
+          claude --dangerously-skip-permissions -p "$(cat <<EOF
+          당신은 이 저장소의 자동화된 개발 에이전트입니다.
+
+          GitHub 이슈 #${ISSUE_NUMBER}를 처리하세요.
+
+          제목: ${ISSUE_TITLE}
+          본문:
+          ${ISSUE_BODY}
+
+          댓글 히스토리:
+          ${COMMENTS}
+
+          ## 지침
+
+          1. 이슈를 분석하세요.
+          2. 구현에 필요한 정보가 부족하면 gh issue comment 으로 질문하세요.
+             - 한 번에 하나의 댓글만 남기세요.
+             - 질문이 있으면 코드 변경 없이 질문만 하고 종료하세요.
+          3. 충분히 명확하면:
+             - 새 브랜치를 만드세요 (issue-${ISSUE_NUMBER}-설명)
+             - 코드를 수정하세요
+             - ruff check, ruff format, pytest 를 모두 통과시키세요
+             - 커밋하고 PR을 여세요
+             - PR 본문에 "Closes #${ISSUE_NUMBER}" 를 포함하세요
+
+          ## 중요 규칙
+
+          - CLAUDE.md 의 프로젝트 규칙을 따르세요
+          - ruff와 pytest를 반드시 통과시키세요: uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest tests/ -v
+          - 기존 코드 스타일을 따르세요
+          - 한국어로 커뮤니케이션하세요
+          EOF
+          )"
