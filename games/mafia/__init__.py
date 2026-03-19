@@ -58,7 +58,6 @@ def log_status(game: Game, client):
 
 
 def register(app):
-    app.command("/새게임")(new_game)
     app.action("mafia_join_game")(handle_join)
     app.action("mafia_start_game")(handle_start_game)
     app.action("mafia_kill_select")(handle_mafia_vote)
@@ -93,14 +92,6 @@ def new_game(ack, command, client):
     ack()
     channel = command["channel_id"]
     user = command["user_id"]
-    text = command.get("text", "").strip()
-
-    if text and text != "마피아":
-        client.chat_postMessage(
-            channel=channel,
-            text=f":x: 알 수 없는 게임 종류입니다: `{text}`\n사용 가능한 게임: `마피아`\n예) `/새게임 마피아`",
-        )
-        return
 
     if channel in sessions and sessions[channel].phase != Phase.LOBBY:
         client.chat_postMessage(channel=channel, text=":x: 이미 진행 중인 게임이 있습니다.")
