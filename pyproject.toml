@@ -1,0 +1,10 @@
+[project]
+name = "everland"
+version = "0.1.0"
+description = "환상의나라 - 슬랙 기반 멀티 게임 봇"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "python-dotenv>=1.2.2",
+    "slack-bolt>=1.27.0",
+]
