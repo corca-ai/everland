@@ -59,8 +59,8 @@ def log_status(game: Game, client):
 
 def register(app):
     app.command("/새게임")(new_game)
-    app.command("/시작")(start_game)
     app.action("mafia_join_game")(handle_join)
+    app.action("mafia_start_game")(handle_start_game)
     app.action("mafia_kill_select")(handle_mafia_vote)
     app.action("mafia_doctor_select")(handle_doctor_vote)
     app.action("mafia_police_select")(handle_police_vote)
@@ -93,6 +93,14 @@ def new_game(ack, command, client):
     ack()
     channel = command["channel_id"]
     user = command["user_id"]
+    text = command.get("text", "").strip()
+
+    if text and text != "마피아":
+        client.chat_postMessage(
+            channel=channel,
+            text=f":x: 알 수 없는 게임 종류입니다: `{text}`\n사용 가능한 게임: `마피아`\n예) `/새게임 마피아`",
+        )
+        return
 
     if channel in sessions and sessions[channel].phase != Phase.LOBBY:
         client.chat_postMessage(channel=channel, text=":x: 이미 진행 중인 게임이 있습니다.")
@@ -126,7 +134,13 @@ def new_game(ack, command, client):
                         "text": {"type": "plain_text", "text": "참여하기"},
                         "style": "primary",
                         "action_id": "mafia_join_game",
-                    }
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "시작"},
+                        "style": "danger",
+                        "action_id": "mafia_start_game",
+                    },
                 ],
             },
         ],
@@ -135,25 +149,25 @@ def new_game(ack, command, client):
     save(game)
 
 
-def start_game(ack, command, client):
+def handle_start_game(ack, body, client):
     ack()
-    channel = command["channel_id"]
-    user = command["user_id"]
+    channel = body["channel"]["id"]
+    user = body["user"]["id"]
 
     game = sessions.get(channel)
     if not game:
-        client.chat_postMessage(
-            channel=channel, text=":x: 열린 게임이 없습니다. `/새게임`으로 먼저 게임을 만들어주세요."
+        client.chat_postEphemeral(
+            channel=channel, user=user, text=":x: 열린 게임이 없습니다. `/새게임`으로 먼저 게임을 만들어주세요."
         )
         return
     if game.phase != Phase.LOBBY:
-        client.chat_postMessage(channel=channel, text=":x: 이미 게임이 진행 중입니다.")
+        client.chat_postEphemeral(channel=channel, user=user, text=":x: 이미 게임이 진행 중입니다.")
         return
     if game.creator != user:
-        client.chat_postMessage(channel=channel, text=":x: 게임을 만든 사람만 시작할 수 있습니다.")
+        client.chat_postEphemeral(channel=channel, user=user, text=":x: 게임을 만든 사람만 시작할 수 있습니다.")
         return
     if len(game.players) < 4:
-        client.chat_postMessage(channel=channel, text=":x: 최소 4명이 필요합니다.")
+        client.chat_postEphemeral(channel=channel, user=user, text=":x: 최소 4명이 필요합니다.")
         return
 
     n_mafia = mafia_count(len(game.players))
@@ -271,7 +285,13 @@ def handle_join(ack, body, client):
                         "text": {"type": "plain_text", "text": "참여하기"},
                         "style": "primary",
                         "action_id": "mafia_join_game",
-                    }
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "시작"},
+                        "style": "danger",
+                        "action_id": "mafia_start_game",
+                    },
                 ],
             },
         ],
