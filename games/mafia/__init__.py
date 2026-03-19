@@ -156,9 +156,6 @@ def handle_start_game(ack, body, client):
     if game.phase != Phase.LOBBY:
         client.chat_postEphemeral(channel=channel, user=user, text=":x: 이미 게임이 진행 중입니다.")
         return
-    if game.creator != user:
-        client.chat_postEphemeral(channel=channel, user=user, text=":x: 게임을 만든 사람만 시작할 수 있습니다.")
-        return
     if len(game.players) < 4:
         client.chat_postEphemeral(channel=channel, user=user, text=":x: 최소 4명이 필요합니다.")
         return
