@@ -8,10 +8,13 @@ on:
 
 jobs:
   handle:
-    # 봇 자신의 댓글에는 반응하지 않음
+    # 봇 자신의 댓글에는 반응하지 않음, PR 댓글은 별도 워크플로우에서 처리
     if: >
-      (github.event_name == 'issues') ||
-      (github.event_name == 'issue_comment' && !endsWith(github.event.comment.user.login, '[bot]'))
+      !github.event.issue.pull_request &&
+      (
+        (github.event_name == 'issues') ||
+        (github.event_name == 'issue_comment' && !endsWith(github.event.comment.user.login, '[bot]'))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -72,7 +75,16 @@ jobs:
              - 커밋하고 PR을 여세요
              - PR 본문에 "Closes #${ISSUE_NUMBER}" 를 포함하세요
 
-          ## 중요 규칙
+          ## 글쓰기 규칙
+
+          이슈 댓글, PR 본문, PR 댓글 등 GitHub에 남기는 모든 글은:
+          - 개발자가 아닌 사람도 이해할 수 있도록 친절하고 쉽게 쓰세요.
+          - 전문 용어를 써야 할 때는 간단한 설명을 함께 적으세요.
+          - 왜 이렇게 바꾸었는지(이유)를 먼저 쓰고, 무엇을 바꾸었는지(내용)를 그 다음에 쓰세요.
+          - 변경 사항은 목록으로 정리하세요.
+          - 딱딱한 어투 대신 자연스럽고 읽기 편한 한국어를 사용하세요.
+
+          ## 기타 규칙
 
           - CLAUDE.md 의 프로젝트 규칙을 따르세요
           - ruff와 pytest를 반드시 통과시키세요: uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest tests/ -v
