@@ -25,7 +25,6 @@ def post(game: Game, client, text: str):
 
 
 def register(app):
-    app.command("/사다리타기")(new_game)
     app.action("ladder_join")(handle_join)
     app.action("ladder_start")(handle_start)
 
@@ -175,7 +174,7 @@ def handle_start(ack, body, client):
         client.chat_postEphemeral(
             channel=channel,
             user=user,
-            text=":x: 열린 게임이 없습니다. `/사다리타기`로 먼저 게임을 만들어주세요.",
+            text=":x: 열린 게임이 없습니다. `/새게임 사다리`로 먼저 게임을 만들어주세요.",
         )
         return
     if game.phase != Phase.LOBBY:

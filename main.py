@@ -12,8 +12,28 @@ from utils import C, log_header, log_phase
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 # 게임 등록 — 새 게임을 추가하려면 여기에 import하고 register/restore 호출
+# 슬래시 커맨드는 새로 추가하지 않고 /새게임 [게임명] 형식을 사용한다
 mafia.register(app)
 ladder.register(app)
+
+
+@app.command("/새게임")
+def route_new_game(ack, command, client):
+    text = command.get("text", "").strip()
+    if text == "사다리":
+        ladder.new_game(ack, command, client)
+    elif text in ("", "마피아"):
+        mafia.new_game(ack, command, client)
+    else:
+        ack()
+        client.chat_postMessage(
+            channel=command["channel_id"],
+            text=(
+                f":x: 알 수 없는 게임 종류입니다: `{text}`\n"
+                "사용 가능한 게임: `마피아`, `사다리`\n"
+                "예) `/새게임 마피아` 또는 `/새게임 사다리`"
+            ),
+        )
 
 
 if __name__ == "__main__":
