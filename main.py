@@ -17,6 +17,9 @@ mafia.register(app)
 
 
 if __name__ == "__main__":
+    import jurigged
+    jurigged.watch()
+
     db.init()
     log_header(f"{C.GREEN}환상의나라 시작{C.RESET}")
 

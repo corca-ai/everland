@@ -8,7 +8,7 @@ from enum import Enum
 import db
 from utils import C, log_header, log_event, log_phase, get_name, names, format_players, send_dm
 
-VOTE_TIMEOUT = 10 * 60  # 10분
+VOTE_TIMEOUT = 5 * 60  # 5분
 
 
 class Phase(Enum):
@@ -31,6 +31,11 @@ class Game:
     thread_ts: str | None = None
     timer: threading.Timer | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    doctors: list[str] = field(default_factory=list)
+    polices: list[str] = field(default_factory=list)
+    doctor_targets: dict[str, str] = field(default_factory=dict)
+    police_targets: dict[str, str] = field(default_factory=dict)
+    runoff_targets: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -45,6 +50,11 @@ class Game:
             "night_votes": self.night_votes,
             "day_votes": self.day_votes,
             "thread_ts": self.thread_ts,
+            "doctors": self.doctors,
+            "polices": self.polices,
+            "doctor_targets": self.doctor_targets,
+            "police_targets": self.police_targets,
+            "runoff_targets": self.runoff_targets,
         }
 
     @classmethod
@@ -60,6 +70,11 @@ class Game:
             night_votes=d["night_votes"],
             day_votes=d["day_votes"],
             thread_ts=d["thread_ts"],
+            doctors=d.get("doctors", []),
+            polices=d.get("polices", []),
+            doctor_targets=d.get("doctor_targets", {}),
+            police_targets=d.get("police_targets", {}),
+            runoff_targets=d.get("runoff_targets", []),
         )
 
 
@@ -79,6 +94,27 @@ def mafia_count(player_count: int) -> int:
     if player_count <= 11:
         return 3
     return 4
+
+
+def special_count(player_count: int) -> tuple[int, int]:
+    """인원수에 따른 (의사 수, 경찰 수) 반환."""
+    if player_count < 6:
+        return 0, 0
+    if player_count <= 11:
+        return 1, 1
+    if player_count <= 14:
+        return 2, 1
+    return 2, 2
+
+
+def role_name(game: Game, player: str) -> str:
+    if player in game.mafia:
+        return "마피아"
+    if player in game.doctors:
+        return "의사"
+    if player in game.polices:
+        return "경찰"
+    return "시민"
 
 
 def check_win(game: Game) -> str | None:
@@ -119,6 +155,8 @@ def register(app):
     app.command("/시작")(start_game)
     app.action("mafia_join_game")(handle_join)
     app.action("mafia_kill_select")(handle_mafia_vote)
+    app.action("mafia_doctor_select")(handle_doctor_vote)
+    app.action("mafia_police_select")(handle_police_vote)
     app.action("mafia_day_vote_select")(handle_day_vote)
 
 
@@ -167,7 +205,7 @@ def new_game(ack, command, client):
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f"<@{user}>님이 *마피아 게임*을 열었습니다! :detective:\n"
+                        f"<@{user}>님이 *마피아 게임*을 열었습니다! {random.choice([':female-detective:', ':male-detective:'])}\n"
                         "참여하려면 아래 버튼을 눌러주세요.\n\n"
                         "현재 참여자: 없음"
                     ),
@@ -210,31 +248,66 @@ def start_game(ack, command, client):
         return
 
     n_mafia = mafia_count(len(game.players))
+    n_doc, n_cop = special_count(len(game.players))
     shuffled = game.players[:]
     random.shuffle(shuffled)
     game.mafia = shuffled[:n_mafia]
     game.citizens = shuffled[n_mafia:]
     game.alive = game.players[:]
+    game.doctors = game.citizens[:n_doc]
+    game.polices = game.citizens[n_doc:n_doc + n_cop]
 
     mafia_names_str = format_players(game.mafia)
 
     log_header(f"{C.GREEN}게임 시작!{C.RESET}{C.BOLD} ({len(game.players)}명)")
     log_event(f"{C.RED}마피아", f"{names(game.mafia, client)}{C.RESET}")
+    if game.doctors:
+        log_event(f"{C.CYAN}의  사", f"{names(game.doctors, client)}{C.RESET}")
+    if game.polices:
+        log_event(f"{C.MAGENTA}경  찰", f"{names(game.polices, client)}{C.RESET}")
     log_event(f"{C.GREEN}시  민", f"{names(game.citizens, client)}{C.RESET}")
 
     for player in game.players:
         if player in game.mafia:
             send_dm(client, player, f":smiling_imp: 당신은 *마피아*입니다!\n동료 마피아: {mafia_names_str}")
+        elif player in game.doctors:
+            send_dm(client, player, ":hospital: 당신은 *의사*입니다.\n매 밤 한 명을 선택해 보호할 수 있습니다. 마피아가 그 사람을 공격하면 살릴 수 있습니다.")
+        elif player in game.polices:
+            send_dm(client, player, ":police_officer: 당신은 *경찰*입니다.\n매 밤 한 명을 조사해 마피아인지 알아낼 수 있습니다.")
         else:
             send_dm(client, player, ":innocent: 당신은 *시민*입니다.\n마피아를 찾아내세요!")
 
-    post(
-        game,
-        client,
-        f":game_die: 게임이 시작됩니다! 참여자 {len(game.players)}명, 마피아 {n_mafia}명\n역할이 DM으로 전달되었습니다.",
+    # 로비 메시지에서 참여하기 버튼 제거
+    player_list = format_players(game.players)
+    client.chat_update(
+        channel=channel,
+        ts=game.thread_ts,
+        text=f"마피아 게임 시작! 참여자 {len(game.players)}명",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*마피아 게임* 이 시작되었습니다! :game_die:\n\n"
+                        f"참여자 ({len(game.players)}명): {player_list}"
+                    ),
+                },
+            },
+        ],
     )
 
-    start_night(game, client)
+    n_plain = len(game.citizens) - n_doc - n_cop
+    role_text = f":game_die: 게임이 시작됩니다! 참여자 {len(game.players)}명, 마피아 {n_mafia}명"
+    if n_doc:
+        role_text += f", 의사 {n_doc}명"
+    if n_cop:
+        role_text += f", 경찰 {n_cop}명"
+    role_text += f", 시민 {n_plain}명"
+    role_text += "\n역할이 DM으로 전달되었습니다."
+    post(game, client, role_text)
+
+    start_day(game, client)
 
 
 # ─── 참여 ───
@@ -268,7 +341,7 @@ def handle_join(ack, body, client):
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        "*마피아 게임* 참여자 모집 중! :detective:\n"
+                        f"*마피아 게임* 참여자 모집 중! {random.choice([':female-detective:', ':male-detective:'])}\n"
                         "참여하려면 아래 버튼을 눌러주세요.\n\n"
                         f"현재 참여자 ({len(game.players)}명): {player_list}"
                     ),
@@ -293,9 +366,25 @@ def handle_join(ack, body, client):
 # ─── 밤 ───
 
 
+def night_all_done(game: Game) -> bool:
+    """밤 행동이 모두 완료되었는지 확인."""
+    alive_mafia = [m for m in game.mafia if m in game.alive]
+    if not all(m in game.night_votes for m in alive_mafia):
+        return False
+    alive_docs = [d for d in game.doctors if d in game.alive]
+    if not all(d in game.doctor_targets for d in alive_docs):
+        return False
+    alive_cops = [c for c in game.polices if c in game.alive]
+    if not all(c in game.police_targets for c in alive_cops):
+        return False
+    return True
+
+
 def start_night(game: Game, client):
     game.phase = Phase.NIGHT
     game.night_votes = {}
+    game.doctor_targets = {}
+    game.police_targets = {}
     save(game)
 
     log_phase(f"{C.BLUE}밤이 되었습니다{C.RESET}")
@@ -304,17 +393,18 @@ def start_night(game: Game, client):
     alive_mafia = [m for m in game.mafia if m in game.alive]
     log_event(f"{C.RED}마피아 투표 대기 중...", f"{names(alive_mafia, client)}{C.RESET}")
 
-    post(game, client, ":night_with_stars: *밤이 되었습니다.* 마피아가 활동합니다... 모두 잠드세요. (10분 제한)")
+    post(game, client, ":night_with_stars: *밤이 되었습니다.* 마피아가 활동합니다...\n:shushing_face: *스레드에서 대화하지 마세요!* 모두 잠드세요. (5분 제한)")
 
-    options = [
+    # 마피아 DM
+    kill_options = [
         {"text": {"type": "plain_text", "text": f"<@{p}>"}, "value": p}
         for p in game.alive
         if p not in game.mafia
     ]
-    blocks = [
+    mafia_blocks = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": ":night_with_stars: *밤이 되었습니다.*\n죽일 사람을 선택하세요. (10분 제한)"},
+            "text": {"type": "mrkdwn", "text": ":night_with_stars: *밤이 되었습니다.*\n죽일 사람을 선택하세요. (5분 제한)"},
         },
         {
             "type": "actions",
@@ -322,15 +412,67 @@ def start_night(game: Game, client):
                 {
                     "type": "static_select",
                     "placeholder": {"type": "plain_text", "text": "대상 선택"},
-                    "options": options,
+                    "options": kill_options,
                     "action_id": "mafia_kill_select",
                 }
             ],
         },
     ]
-
     for m in alive_mafia:
-        send_dm(client, m, "밤입니다. 죽일 사람을 선택하세요.", blocks=blocks)
+        send_dm(client, m, "밤입니다. 죽일 사람을 선택하세요.", blocks=mafia_blocks)
+
+    # 의사 DM
+    doc_options = [
+        {"text": {"type": "plain_text", "text": f"<@{p}>"}, "value": p}
+        for p in game.alive
+    ]
+    doc_blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": ":hospital: *밤이 되었습니다.*\n보호할 사람을 선택하세요. 선택한 사람이 마피아에게 공격당하면 살릴 수 있습니다. (5분 제한)"},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "static_select",
+                    "placeholder": {"type": "plain_text", "text": "보호할 사람 선택"},
+                    "options": doc_options,
+                    "action_id": "mafia_doctor_select",
+                }
+            ],
+        },
+    ]
+    for d in game.doctors:
+        if d in game.alive:
+            send_dm(client, d, "밤입니다. 보호할 사람을 선택하세요.", blocks=doc_blocks)
+
+    # 경찰 DM
+    for c in game.polices:
+        if c in game.alive:
+            cop_options = [
+                {"text": {"type": "plain_text", "text": f"<@{p}>"}, "value": p}
+                for p in game.alive
+                if p != c
+            ]
+            cop_blocks = [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": ":police_officer: *밤이 되었습니다.*\n조사할 사람을 선택하세요. 선택한 사람이 마피아인지 알려드립니다. (5분 제한)"},
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "static_select",
+                            "placeholder": {"type": "plain_text", "text": "조사할 사람 선택"},
+                            "options": cop_options,
+                            "action_id": "mafia_police_select",
+                        }
+                    ],
+                },
+            ]
+            send_dm(client, c, "밤입니다. 조사할 사람을 선택하세요.", blocks=cop_blocks)
 
     game.timer = threading.Timer(VOTE_TIMEOUT, night_timeout, args=[game, client])
     game.timer.daemon = True
@@ -341,7 +483,7 @@ def night_timeout(game: Game, client):
     with game.lock:
         if game.phase != Phase.NIGHT:
             return
-        log_event(f"{C.RED}시간 초과", f"밤 투표 10분 경과{C.RESET}")
+        log_event(f"{C.RED}시간 초과", f"밤 투표 5분 경과{C.RESET}")
         resolve_night(game, client)
 
 
@@ -372,8 +514,75 @@ def handle_mafia_vote(ack, body, client):
 
         send_dm(client, user, f":knife: <@{selected}>을(를) 선택했습니다.")
 
-        alive_mafia = [m for m in game.mafia if m in game.alive]
-        if all(m in game.night_votes for m in alive_mafia):
+        if night_all_done(game):
+            cancel_timer(game)
+            resolve_night(game, client)
+
+
+def handle_doctor_vote(ack, body, client):
+    ack()
+    user = body["user"]["id"]
+    selected = body["actions"][0]["selected_option"]["value"]
+
+    game = None
+    for g in sessions.values():
+        if user in g.doctors and g.phase == Phase.NIGHT:
+            game = g
+            break
+    if not game:
+        return
+
+    with game.lock:
+        if game.phase != Phase.NIGHT:
+            return
+
+        game.doctor_targets[user] = selected
+        save(game)
+
+        log_event(
+            f"{C.CYAN}의사 보호",
+            f"{get_name(user, client)} → {C.BOLD}{get_name(selected, client)}{C.RESET}",
+        )
+
+        send_dm(client, user, f":hospital: <@{selected}>을(를) 보호합니다.")
+
+        if night_all_done(game):
+            cancel_timer(game)
+            resolve_night(game, client)
+
+
+def handle_police_vote(ack, body, client):
+    ack()
+    user = body["user"]["id"]
+    selected = body["actions"][0]["selected_option"]["value"]
+
+    game = None
+    for g in sessions.values():
+        if user in g.polices and g.phase == Phase.NIGHT:
+            game = g
+            break
+    if not game:
+        return
+
+    with game.lock:
+        if game.phase != Phase.NIGHT:
+            return
+
+        game.police_targets[user] = selected
+        save(game)
+
+        is_mafia = selected in game.mafia
+        result = "마피아" if is_mafia else "마피아가 아닙니다"
+        emoji = ":rotating_light:" if is_mafia else ":white_check_mark:"
+
+        log_event(
+            f"{C.MAGENTA}경찰 조사",
+            f"{get_name(user, client)} → {C.BOLD}{get_name(selected, client)}{C.RESET} ({'마피아' if is_mafia else '시민'})",
+        )
+
+        send_dm(client, user, f"{emoji} <@{selected}>의 조사 결과: *{result}*")
+
+        if night_all_done(game):
             cancel_timer(game)
             resolve_night(game, client)
 
@@ -393,15 +602,31 @@ def resolve_night(game: Game, client):
     top_targets = [t for t, c in vote_counts.items() if c == max_votes]
     victim = random.choice(top_targets)
 
+    # 의사가 보호한 경우 (아무 의사든 해당 대상을 지목했으면 보호)
+    protected = set(game.doctor_targets.values())
+    if victim in protected:
+        log_phase(f"{C.YELLOW}아침이 밝았습니다{C.RESET}")
+        log_event(f"{C.CYAN}의사 보호 성공!", f"{C.BOLD}{get_name(victim, client)}{C.RESET} - 의사가 살림")
+        post(game, client, ":sunrise: *아침이 밝았습니다.*\n\n:hospital: 누군가 마피아에게 습격당했지만, 의사의 활약으로 살아남았습니다!")
+
+        winner = check_win(game)
+        if winner:
+            end_game(game, winner, client)
+            return
+
+        start_day(game, client)
+        return
+
     game.alive.remove(victim)
     save(game)
 
-    role = "마피아" if victim in game.mafia else "시민"
+    is_mafia = victim in game.mafia
+    reveal = "마피아" if is_mafia else "마피아가 아닙니다"
 
     log_phase(f"{C.YELLOW}아침이 밝았습니다{C.RESET}")
-    log_event(f"{C.RED}사망", f"{C.BOLD}{get_name(victim, client)}{C.RESET} ({role}) - 마피아에 의해 살해됨")
+    log_event(f"{C.RED}사망", f"{C.BOLD}{get_name(victim, client)}{C.RESET} ({role_name(game, victim)}) - 마피아에 의해 살해됨")
 
-    post(game, client, f":sunrise: *아침이 밝았습니다.*\n\n:skull: <@{victim}>님이 마피아에 의해 살해당했습니다. (정체: {role})")
+    post(game, client, f":sunrise: *아침이 밝았습니다.*\n\n:skull: <@{victim}>님이 마피아에 의해 살해당했습니다. ({reveal})")
 
     winner = check_win(game)
     if winner:
@@ -417,6 +642,7 @@ def resolve_night(game: Game, client):
 def start_day(game: Game, client):
     game.phase = Phase.DAY
     game.day_votes = {}
+    game.runoff_targets = []
     save(game)
 
     log_phase(f"{C.YELLOW}낮 - 투표 시간{C.RESET}")
@@ -429,7 +655,7 @@ def start_day(game: Game, client):
         client,
         (
             f":speaking_head_in_silhouette: *낮입니다.* 스레드에서 토론하세요!\n"
-            f"DM으로 투표가 전송됩니다. 의심되는 사람을 투표하세요. (10분 제한)\n\n"
+            f"DM으로 투표가 전송됩니다. 의심되는 사람을 투표하세요. (5분 제한)\n\n"
             f"생존자 ({len(game.alive)}명): {alive_list}"
         ),
     )
@@ -449,7 +675,7 @@ def start_day(game: Game, client):
             blocks=[
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": ":ballot_box: *투표 시간입니다.*\n처형할 사람을 선택하세요. (10분 제한)"},
+                    "text": {"type": "mrkdwn", "text": ":ballot_box: *투표 시간입니다.*\n처형할 사람을 선택하세요. (5분 제한)"},
                 },
                 {
                     "type": "actions",
@@ -475,7 +701,7 @@ def day_timeout(game: Game, client):
         if game.phase != Phase.DAY:
             return
         not_voted = [p for p in game.alive if p not in game.day_votes]
-        log_event(f"{C.YELLOW}시간 초과", f"낮 투표 10분 경과 (미투표: {names(not_voted, client)}){C.RESET}")
+        log_event(f"{C.YELLOW}시간 초과", f"낮 투표 5분 경과 (미투표: {names(not_voted, client)}){C.RESET}")
         post(game, client, ":hourglass: 투표 시간이 종료되었습니다! 현재 투표 결과로 집계합니다.")
         resolve_day(game, client)
 
@@ -536,6 +762,64 @@ def handle_day_vote(ack, body, client):
             resolve_day(game, client)
 
 
+def start_runoff(game: Game, targets: list[str], client):
+    game.day_votes = {}
+    game.runoff_targets = targets
+    save(game)
+
+    target_names = format_players(targets)
+
+    log_phase(f"{C.YELLOW}결선 투표{C.RESET}")
+    log_event(f"{C.YELLOW}후보", f"{names(targets, client)}{C.RESET}")
+
+    post(
+        game,
+        client,
+        (
+            f":scales: *동률입니다!* 결선 투표를 진행합니다.\n"
+            f"후보: {target_names}\n"
+            f"DM으로 결선 투표가 전송됩니다. (5분 제한)"
+        ),
+    )
+
+    for player in game.alive:
+        candidates = [t for t in targets if t != player]
+        if not candidates:
+            continue
+        options = [
+            {"text": {"type": "plain_text", "text": f"<@{p}>"}, "value": p}
+            for p in candidates
+        ]
+        options.append({"text": {"type": "plain_text", "text": "건너뛰기"}, "value": "skip"})
+
+        send_dm(
+            client,
+            player,
+            "결선 투표입니다.",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": ":scales: *결선 투표입니다.*\n동률인 후보 중 처형할 사람을 선택하세요. (5분 제한)"},
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "static_select",
+                            "placeholder": {"type": "plain_text", "text": "처형할 사람 선택"},
+                            "options": options,
+                            "action_id": "mafia_day_vote_select",
+                        }
+                    ],
+                },
+            ],
+        )
+
+    game.timer = threading.Timer(VOTE_TIMEOUT, day_timeout, args=[game, client])
+    game.timer.daemon = True
+    game.timer.start()
+
+
 def resolve_day(game: Game, client):
     vote_counts: dict[str, int] = {}
     for target in game.day_votes.values():
@@ -561,19 +845,26 @@ def resolve_day(game: Game, client):
     top_targets = [t for t, c in vote_counts.items() if c == max_votes]
 
     if len(top_targets) > 1:
-        log_event(f"{C.DIM}결과", f"동률 - 처형 없음{C.RESET}")
-        post(game, client, ":scales: 동률입니다! 아무도 처형되지 않았습니다.")
-        start_night(game, client)
+        if game.runoff_targets:
+            # 결선 투표에서도 동률 → 처형 없음
+            log_event(f"{C.DIM}결과", f"결선 동률 - 처형 없음{C.RESET}")
+            post(game, client, ":scales: 결선 투표에서도 동률입니다! 아무도 처형되지 않았습니다.")
+            start_night(game, client)
+            return
+        # 동률 → 결선 투표
+        log_event(f"{C.YELLOW}동률!", f"{names(top_targets, client)} → 결선 투표{C.RESET}")
+        start_runoff(game, top_targets, client)
         return
 
     victim = top_targets[0]
     game.alive.remove(victim)
     save(game)
 
-    role = "마피아" if victim in game.mafia else "시민"
-    log_event(f"{C.MAGENTA}처형", f"{C.BOLD}{get_name(victim, client)}{C.RESET} ({role}) - 투표에 의해 처형됨")
+    is_mafia = victim in game.mafia
+    reveal = "마피아" if is_mafia else "마피아가 아닙니다"
+    log_event(f"{C.MAGENTA}처형", f"{C.BOLD}{get_name(victim, client)}{C.RESET} ({role_name(game, victim)}) - 투표에 의해 처형됨")
 
-    post(game, client, f":coffin: <@{victim}>님이 투표로 처형되었습니다. (정체: {role})")
+    post(game, client, f":coffin: <@{victim}>님이 투표로 처형되었습니다. ({reveal})")
 
     winner = check_win(game)
     if winner:
@@ -589,7 +880,6 @@ def resolve_day(game: Game, client):
 def end_game(game: Game, winner: str, client):
     cancel_timer(game)
     mafia_names = format_players(game.mafia)
-    citizen_names = format_players(game.citizens)
 
     if winner == "mafia":
         log_header(f"{C.RED}게임 종료 - 마피아 승리!{C.RESET}")
@@ -597,12 +887,27 @@ def end_game(game: Game, winner: str, client):
         log_header(f"{C.GREEN}게임 종료 - 시민 승리!{C.RESET}")
 
     log_event(f"{C.RED}마피아", f"{names(game.mafia, client)}{C.RESET}")
+    if game.doctors:
+        log_event(f"{C.CYAN}의  사", f"{names(game.doctors, client)}{C.RESET}")
+    if game.polices:
+        log_event(f"{C.MAGENTA}경  찰", f"{names(game.polices, client)}{C.RESET}")
     log_event(f"{C.GREEN}시  민", f"{names(game.citizens, client)}{C.RESET}")
 
+    role_lines = [f"마피아: {mafia_names}"]
+    if game.doctors:
+        role_lines.append(f"의사: {format_players(game.doctors)}")
+    if game.polices:
+        role_lines.append(f"경찰: {format_players(game.polices)}")
+    specials = set(game.doctors + game.polices)
+    plain_citizens = [p for p in game.citizens if p not in specials]
+    if plain_citizens:
+        role_lines.append(f"시민: {format_players(plain_citizens)}")
+    roles_text = "\n".join(role_lines)
+
     if winner == "mafia":
-        text = f":smiling_imp: *마피아 승리!*\n\n마피아: {mafia_names}\n시민: {citizen_names}"
+        text = f":smiling_imp: *마피아 승리!*\n\n{roles_text}"
     else:
-        text = f":tada: *시민 승리!*\n\n마피아: {mafia_names}\n시민: {citizen_names}"
+        text = f":tada: *시민 승리!*\n\n{roles_text}"
 
     post(game, client, text)
     db.delete(game.channel)
