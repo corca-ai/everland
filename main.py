@@ -6,13 +6,14 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 load_dotenv()
 
-from games import mafia
+from games import ladder, mafia
 from utils import C, log_header, log_phase
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 # 게임 등록 — 새 게임을 추가하려면 여기에 import하고 register/restore 호출
 mafia.register(app)
+ladder.register(app)
 
 
 if __name__ == "__main__":
@@ -33,6 +34,7 @@ if __name__ == "__main__":
 
     log_phase(f"{C.CYAN}저장된 게임 복원{C.RESET}")
     mafia.restore(app.client)
+    ladder.restore(app.client)
 
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
     handler.start()
