@@ -16,5 +16,8 @@ wheels/
 # Database
 *.db
 
+# Log
+*.log
+
 # direnv
 .direnv
