@@ -17,6 +17,16 @@ mafia.register(app)
 ladder.register(app)
 
 
+@app.command("/시작")
+def handle_slash_start(ack, command, client):
+    ack()
+    client.chat_postEphemeral(
+        channel=command["channel_id"],
+        user=command["user_id"],
+        text=":information_source: `/시작` 커맨드는 지원하지 않습니다.\n게임 로비 메시지의 *시작* 버튼을 눌러주세요.",
+    )
+
+
 @app.command("/새게임")
 def route_new_game(ack, command, client):
     text = command.get("text", "").strip()

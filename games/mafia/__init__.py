@@ -4,6 +4,8 @@ import random
 import threading
 from pathlib import Path
 
+from slack_sdk.errors import SlackApiError
+
 from db import GameDB
 from utils import C, format_players, get_name, log_event, log_header, log_phase, names, send_dm
 
@@ -201,22 +203,27 @@ def handle_start_game(ack, body, client):
 
     # 로비 메시지에서 참여하기 버튼 제거
     player_list = format_players(game.players)
-    client.chat_update(
-        channel=channel,
-        ts=game.thread_ts,
-        text=f"마피아 게임 시작! 참여자 {len(game.players)}명",
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"*마피아 게임* 이 시작되었습니다! :game_die:\n\n참여자 ({len(game.players)}명): {player_list}"
-                    ),
+    try:
+        client.chat_update(
+            channel=channel,
+            ts=game.thread_ts,
+            text=f"마피아 게임 시작! 참여자 {len(game.players)}명",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*마피아 게임* 이 시작되었습니다! :game_die:\n\n참여자 ({len(game.players)}명): {player_list}"
+                        ),
+                    },
                 },
-            },
-        ],
-    )
+            ],
+        )
+    except SlackApiError as e:
+        if e.response.get("error") != "message_not_found":
+            raise
+        log_event(f"{C.RED}오류", f"로비 메시지가 삭제됨 — 계속 진행 (채널 {channel}){C.RESET}")
 
     n_plain = len(game.citizens) - n_doc - n_cop
     role_text = f":game_die: 게임이 시작됩니다! 참여자 {len(game.players)}명, 마피아 {n_mafia}명"
@@ -252,41 +259,54 @@ def handle_join(ack, body, client):
 
     log_event(f"{C.CYAN}+참여", f"{get_name(user, client)} (현재 {len(game.players)}명){C.RESET}")
 
-    client.chat_update(
-        channel=channel,
-        ts=game.thread_ts,
-        text=f"마피아 게임 참여자 모집 중! 현재 {len(game.players)}명",
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"*마피아 게임* 참여자 모집 중! {random.choice([':female-detective:', ':male-detective:'])}\n"
-                        "참여하려면 아래 버튼을 눌러주세요.\n\n"
-                        f"현재 참여자 ({len(game.players)}명): {player_list}"
-                    ),
+    try:
+        client.chat_update(
+            channel=channel,
+            ts=game.thread_ts,
+            text=f"마피아 게임 참여자 모집 중! 현재 {len(game.players)}명",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*마피아 게임* 참여자 모집 중! {random.choice([':female-detective:', ':male-detective:'])}\n"
+                            "참여하려면 아래 버튼을 눌러주세요.\n\n"
+                            f"현재 참여자 ({len(game.players)}명): {player_list}"
+                        ),
+                    },
                 },
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "참여하기"},
-                        "style": "primary",
-                        "action_id": "mafia_join_game",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "시작"},
-                        "style": "danger",
-                        "action_id": "mafia_start_game",
-                    },
-                ],
-            },
-        ],
-    )
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "참여하기"},
+                            "style": "primary",
+                            "action_id": "mafia_join_game",
+                        },
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "시작"},
+                            "style": "danger",
+                            "action_id": "mafia_start_game",
+                        },
+                    ],
+                },
+            ],
+        )
+    except SlackApiError as e:
+        if e.response.get("error") == "message_not_found":
+            log_event(f"{C.RED}오류", f"로비 메시지가 삭제됨 — 세션 정리 (채널 {channel}){C.RESET}")
+            db.delete(channel)
+            del sessions[channel]
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user,
+                text=":x: 게임 로비 메시지가 삭제되었습니다. `/새게임 마피아`로 다시 시작해주세요.",
+            )
+            return
+        raise
     save(game)
 
 
