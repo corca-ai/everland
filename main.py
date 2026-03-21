@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
     def _reload(signum, frame):
         log_phase(f"{C.YELLOW}코드 리로드{C.RESET}")
-        for path, cf in watcher.registry.cache.items():
+        for _path, cf in watcher.registry.cache.items():
             cf.refresh()
 
     signal.signal(signal.SIGUSR1, _reload)

@@ -17,5 +17,8 @@ jobs:
       - name: Format
         run: uv run --group dev ruff format --check .
 
+      - name: Type check
+        run: uv run --group dev ty check .
+
       - name: Test
         run: uv run --group dev pytest tests/ -v

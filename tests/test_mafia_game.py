@@ -35,7 +35,7 @@ def make_game(**overrides) -> Game:
         polices=[],
     )
     defaults.update(overrides)
-    return Game(**defaults)
+    return Game(**defaults)  # type: ignore[invalid-argument-type]
 
 
 # ─── mafia_count ───
